@@ -75,7 +75,6 @@ static bool is_still_name(const char* name) {
 }
 
 static bool read_file_bytes(const char* path, std::vector<unsigned char>& out) {
-    // Prefer UTF-8 / ACP → wide open so Chinese paths work under XnView
     int wlen = MultiByteToWideChar(CP_ACP, 0, path, -1, nullptr, 0);
     if (wlen <= 0)
         return false;
@@ -151,7 +150,6 @@ static bool extract_still_from_livp(const char* path, std::vector<unsigned char>
 static bool decode_with_wic(const unsigned char* data, size_t size, LivpData& img) {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const bool need_uninit = SUCCEEDED(hr);
-    // RPC_E_CHANGED_MODE means already initialized differently — still OK to use COM
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
         return false;
 
@@ -174,7 +172,7 @@ static bool decode_with_wic(const unsigned char* data, size_t size, LivpData& im
     GlobalUnlock(hmem);
 
     IStream* stream = nullptr;
-    hr = CreateStreamOnHGlobal(hmem, TRUE, &stream); // stream owns hmem
+    hr = CreateStreamOnHGlobal(hmem, TRUE, &stream);
     if (FAILED(hr)) {
         GlobalFree(hmem);
         factory->Release();

@@ -1,5 +1,4 @@
 LIBRARY XLivp
-DESCRIPTION 'Apple Live Photo LIVP still-image plugin for XnView'
 EXPORTS
 	gfpGetPluginInfo
 	gfpLoadPictureInit

@@ -32,7 +32,6 @@ cd plugin
 build.bat
 install.bat
 ```
-
 ## Notes
 
 - **JPEG** stills: usually work with built-in Windows codecs
