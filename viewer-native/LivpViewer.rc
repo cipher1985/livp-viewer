@@ -1,0 +1,4 @@
+#include "resource.h"
+
+IDI_APP  ICON  "res\\app.ico"
+IDR_LIVE RCDATA "res\\live.png"

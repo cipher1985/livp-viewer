@@ -1,0 +1,31 @@
+# Build outputs
+**/build/
+**/*.obj
+**/*.exp
+**/*.lib
+**/*.res
+**/*.pdb
+**/*.ilk
+**/XLivp.usr
+**/XLivp.dll
+**/test_load.exe
+
+# SDK / vendor dumps (not needed in repo)
+PluginsSDK/
+PluginsSDK-win.zip
+third_party/
+
+# Local copies
+LivpViewer.exe
+viewer-native/LivpViewer.exe
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vs/
+*.user
+
+dist/
+
