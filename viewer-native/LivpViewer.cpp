@@ -44,6 +44,7 @@ static constexpr wchar_t kVideoClass[] = L"LivpViewerVideo";
 static constexpr wchar_t kCoverClass[] = L"LivpViewerCover";
 static constexpr UINT WM_APP_PLAY_ENDED = WM_APP + 1;
 static constexpr UINT WM_APP_PLAY_STARTED = WM_APP + 2;
+static constexpr UINT WM_APP_RETRY_CODEC = WM_APP + 3;
 static constexpr int kLiveIconDraw = 40;
 
 struct RgbImage {
@@ -81,6 +82,8 @@ struct AppState {
     POINT panLast{};
     std::vector<std::wstring> neighbors;
     int neighborIndex = -1;
+    std::wstring pendingRetryPath; // reopen after codec install
+    bool pendingRetryPlay = false;
 };
 
 static AppState g;
@@ -130,6 +133,7 @@ static bool runWingetInstall(const wchar_t* storeProductId) {
         DWORD code = 1;
         GetExitCodeProcess(sei.hProcess, &code);
         CloseHandle(sei.hProcess);
+        // 0 = ok; some winget versions return other success codes when already installed
         return code == 0;
     }
     return true;
@@ -141,8 +145,13 @@ static void openStoreProduct(const wchar_t* storeProductId) {
     ShellExecuteW(g.hwnd, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+static void openLivp(const wchar_t* path); // used after codec install
+static void startPlayback();
+
 // HEIF: 9PMMSR1CGPWG   HEVC(厂商免费版): 9N4WGH0Z6VHQ
-static void offerInstallCodecs(bool needHeif, bool needHevc) {
+// retryPath: install 成功后自动重新打开；retryPlay: 打开后再自动播放
+static void offerInstallCodecs(bool needHeif, bool needHevc,
+                               const wchar_t* retryPath, bool retryPlay) {
     if (!needHeif && !needHevc) return;
 
     wchar_t msg[640];
@@ -150,7 +159,7 @@ static void offerInstallCodecs(bool needHeif, bool needHevc) {
               L"查看此 Live Photo 需要 Windows 系统解码组件：\n\n"
               L"%s%s"
               L"是否现在自动安装？\n\n"
-              L"（将尝试使用 winget / 微软商店，可能需要确认）",
+              L"（优先使用 winget，失败则打开微软商店；可能需要确认）",
               needHeif ? L"· HEIF 图像扩展（解码 .heic 静图）\n" : L"",
               needHevc ? L"· HEVC 视频扩展（播放 .mov / 部分 HEIC）\n" : L"");
 
@@ -158,29 +167,44 @@ static void offerInstallCodecs(bool needHeif, bool needHevc) {
                     MB_YESNO | MB_ICONINFORMATION | MB_DEFBUTTON1) != IDYES)
         return;
 
-    HCURSOR prev = SetCursor(LoadCursor(nullptr, IDC_WAIT));
-    bool ok = true;
-    if (needHeif) {
-        if (!runWingetInstall(L"9PMMSR1CGPWG")) {
-            openStoreProduct(L"9PMMSR1CGPWG");
-            ok = false;
-        }
+    const bool haveWinget = SearchPathW(nullptr, L"winget.exe", nullptr, MAX_PATH, nullptr, nullptr) != 0;
+    if (!haveWinget) {
+        if (needHeif) openStoreProduct(L"9PMMSR1CGPWG");
+        if (needHevc) openStoreProduct(L"9N4WGH0Z6VHQ");
+        MessageBoxW(g.hwnd,
+                    L"未找到 winget，已打开微软商店。\n"
+                    L"安装完成后回到本程序，重新打开该文件即可。",
+                    L"LivpViewer", MB_ICONINFORMATION);
+        return;
     }
-    if (needHevc) {
-        if (!runWingetInstall(L"9N4WGH0Z6VHQ")) {
-            openStoreProduct(L"9N4WGH0Z6VHQ");
-            ok = false;
-        }
+
+    HCURSOR prev = SetCursor(LoadCursor(nullptr, IDC_WAIT));
+    bool allOk = true;
+    if (needHeif && !runWingetInstall(L"9PMMSR1CGPWG")) {
+        openStoreProduct(L"9PMMSR1CGPWG");
+        allOk = false;
+    }
+    if (needHevc && !runWingetInstall(L"9N4WGH0Z6VHQ")) {
+        openStoreProduct(L"9N4WGH0Z6VHQ");
+        allOk = false;
     }
     SetCursor(prev);
 
-    if (ok) {
+    if (allOk && retryPath && retryPath[0]) {
+        g.pendingRetryPath = retryPath;
+        g.pendingRetryPlay = retryPlay;
+        MessageBoxW(g.hwnd,
+                    L"组件已安装（或已就绪）。\n将自动重新打开文件。",
+                    L"LivpViewer", MB_ICONINFORMATION);
+        PostMessageW(g.hwnd, WM_APP_RETRY_CODEC, 0, 0);
+    } else if (allOk) {
         MessageBoxW(g.hwnd,
                     L"安装流程已结束。\n请重新打开该 .livp 文件后再试。",
                     L"LivpViewer", MB_ICONINFORMATION);
     } else {
         MessageBoxW(g.hwnd,
-                    L"已打开微软商店页面。\n请在商店中完成安装后，重新打开该文件。",
+                    L"部分组件需在微软商店中确认安装。\n"
+                    L"完成后请重新打开该文件。",
                     L"LivpViewer", MB_ICONINFORMATION);
     }
 }
@@ -817,7 +841,7 @@ static void startPlayback() {
         g.tempVideo.clear();
         recreateVideoChild();
         layoutCover(true);
-        offerInstallCodecs(false, true);
+        offerInstallCodecs(false, true, g.path.c_str(), true);
         return;
     }
     g.player->Play();
@@ -866,7 +890,7 @@ static void openLivp(const wchar_t* path) {
         const bool heic = isHeicName(stillName.c_str());
         if (heic) {
             // HEIC 通常还需要 HEVC 扩展
-            offerInstallCodecs(true, true);
+            offerInstallCodecs(true, true, pathCopy.c_str(), false);
         } else {
             MessageBoxW(g.hwnd, L"无法解码静图。", L"LivpViewer", MB_ICONERROR);
         }
@@ -1226,6 +1250,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         } else if (wp == VK_RIGHT || wp == VK_NEXT) {
             cancelPendingPlay();
             goNeighbor(1);
+        } else if (wp == 'I' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Manual: install HEIF + HEVC
+            const wchar_t* p = g.path.empty() ? nullptr : g.path.c_str();
+            offerInstallCodecs(true, true, p, false);
         }
         return 0;
 
@@ -1242,6 +1270,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kTimerRevealVideo);
         revealVideoSurface();
         return 0;
+
+    case WM_APP_RETRY_CODEC: {
+        std::wstring path = g.pendingRetryPath;
+        const bool play = g.pendingRetryPlay;
+        g.pendingRetryPath.clear();
+        g.pendingRetryPlay = false;
+        if (!path.empty()) {
+            openLivp(path.c_str());
+            if (play && g.hasFile)
+                startPlayback();
+        }
+        return 0;
+    }
 
     case WM_APP_PLAY_ENDED:
         stopPlayback();
